@@ -1,9 +1,12 @@
 import numpy as np
+np.random.seed(123) # for reproducibility
 from keras import applications
+from keras import regularizers
 from keras.models import Sequential
 from keras.layers import Dropout, Flatten, Dense
 from keras.utils.np_utils import to_categorical
 from keras.preprocessing.image import ImageDataGenerator, img_to_array, load_img
+from keras.layers.normalization import BatchNormalization
 import matplotlib.pyplot as plt
 import math
 import cv2
@@ -11,45 +14,41 @@ import cv2
 
 # dimensions of our images
 img_width, img_height = 224, 224
-
 top_model_weights_path = 'bottleneck_fc_model.h5'
 train_data_dir = 'data/train'
 validation_data_dir = 'data/validation/'
 
-# number of epochs to train top model
+# hyperparameters
 epochs = 50
-# batch size used by flow_from_directory and predict_generator
 batch_size = 16
 
 
 def save_bottleneck_features():
     model = applications.VGG16(include_top=False, weights='imagenet')
 
-    # train_datagen = ImageDataGenerator(rescale=1./255,
-    #                                    shear_range=0.2,
-    #                                    zoom_range=0.2,
-    #                                    horizontal_flip=True)
+    datagen = ImageDataGenerator(rescale=1./255,
+                                 shear_range=0.2,
+                                 zoom_range=0.2,
+                                 horizontal_flip=True)
 
-    train_datagen = ImageDataGenerator(rescale=1./255)
-    test_datagen = ImageDataGenerator(rescale=1./255)
-
-    generator = train_datagen.flow_from_directory(train_data_dir,
-                                                  target_size=(img_width, img_height),
-                                                  batch_size=batch_size,
-                                                  shuffle=False)
+    generator = datagen.flow_from_directory(train_data_dir,
+                                            target_size=(img_width, img_height),
+                                            batch_size=batch_size,
+                                            shuffle=False)
 
     no_train_samples = len(generator.filenames)
-    num_classes = len(generator.class_indices)
 
     predict_size_train = int(math.ceil(no_train_samples / batch_size))
     bottleneck_features_train = model.predict_generator(generator, predict_size_train)
     np.save('bottleneck_features_train.npy', bottleneck_features_train)
 
-    generator = test_datagen.flow_from_directory(validation_data_dir,
-                                                 target_size=(img_width, img_height),
-                                                 batch_size=batch_size,
-                                                 class_mode=None,
-                                                 shuffle=False)
+    datagen = ImageDataGenerator(rescale=1./255)
+
+    generator = datagen.flow_from_directory(validation_data_dir,
+                                            target_size=(img_width, img_height),
+                                            batch_size=batch_size,
+                                            class_mode=None,
+                                            shuffle=False)
 
     no_validation_samples = len(generator.filenames)
 
@@ -59,10 +58,9 @@ def save_bottleneck_features():
 
 
 def train_top_model():
-    train_datagen_top = ImageDataGenerator(rescale=1./255)
-    test_datagen_top = ImageDataGenerator(rescale=1./255)
+    datagen_top = ImageDataGenerator(rescale=1./255)
 
-    generator_top = train_datagen_top.flow_from_directory(train_data_dir,
+    generator_top = datagen_top.flow_from_directory(train_data_dir, 
                                                     target_size=(img_width, img_height),
                                                     batch_size=batch_size,
                                                     class_mode='categorical',
@@ -73,30 +71,28 @@ def train_top_model():
     # save the class indices to use later in predictions
     np.save('class_indices.npy', generator_top.class_indices)
 
+    # get the class labels for the training data, in the original order
+    train_labels = generator_top.classes
+    # convert the training labels to categorical vectors
+    train_labels = to_categorical(train_labels, num_classes=num_classes)
+
+    generator_top = datagen_top.flow_from_directory(validation_data_dir,
+                                                    target_size=(img_width, img_height),
+                                                    batch_size=batch_size,
+                                                    class_mode=None,
+                                                    shuffle=False)
+
+    validation_labels = generator_top.classes
+    validation_labels = to_categorical(validation_labels, num_classes=num_classes)
+
     # load the bottleneck features saved earlier
     train_data = np.load('bottleneck_features_train.npy')
     validation_data = np.load('bottleneck_features_validation.npy')
 
-    # get the class labels for the training data, in the original order
-    train_labels = generator_top.classes
-
-    # convert the training labels to categorical vectors
-    train_labels = to_categorical(train_labels, num_classes=num_classes)
-
-    generator_top = test_datagen_top.flow_from_directory(validation_data_dir,
-                                                         target_size=(img_width, img_height),
-                                                         batch_size=batch_size,
-                                                         class_mode=None,
-                                                         shuffle=False)
-
-    validation_labels = generator_top.classes
-
-    # convert the validation labels to categorical vectors
-    validation_labels = to_categorical(validation_labels, num_classes=num_classes)
-
     # build the small fully-connected model on top of the stored features
     model = Sequential()
     model.add(Flatten(input_shape=train_data.shape[1:]))
+    model.add(BatchNormalization())
     model.add(Dense(256, activation='relu'))
     model.add(Dropout(0.5))
     model.add(Dense(num_classes, activation='softmax'))
@@ -134,7 +130,6 @@ def train_top_model():
     plt.plot(history.history['val_loss'])
     plt.title('model loss')
     plt.ylabel('loss')
-    plt.xlabel('epoch')
     plt.legend(['train', 'test'], loc='upper left')
     plt.show()
 
@@ -144,7 +139,7 @@ def predict():
 
     num_classes = len(class_dictionary)
 
-    image_path = 'test/blueberry.jpg'
+    image_path = 'test/cherry/1056.jpg'
 
     orig = cv2.imread(image_path)
 
@@ -161,6 +156,7 @@ def predict():
     # build top model
     model = Sequential()
     model.add(Flatten(input_shape=bottleneck_prediction.shape[1:]))
+    model.add(BatchNormalization())
     model.add(Dense(256, activation='relu'))
     model.add(Dropout(0.5))
     model.add(Dense(num_classes, activation='sigmoid'))
@@ -180,14 +176,15 @@ def predict():
 
     print("Image ID: {}, Label: {}".format(inID, label))
 
-    # display the predictions with the image
     cv2.putText(orig, "Predicted: {}".format(label), (10, 30),
-                cv2.FONT_HERSHEY_PLAIN, 1.5, (43, 99, 255), 2)
+                cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 0, 0), 2)
 
-    cv2.imshow("Classification", orig)
+    cv2.imshow('Classification', orig)
+    cv2.imwrite('predicted.jpg', orig)
+    cv2.waitKey(0)
 
 
 if __name__ == '__main__': 
     # save_bottleneck_features()
-    train_top_model()
-    # predict()
+    # train_top_model()
+    predict()
