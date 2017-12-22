@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 np.random.seed(123) # for reproducibility
 from keras import applications
@@ -89,7 +90,7 @@ def train_top_model():
     train_data = np.load('bottleneck_features_train.npy')
     validation_data = np.load('bottleneck_features_validation.npy')
 
-    # build the small fully-connected model on top of the stored features
+    # build the model
     model = Sequential()
     model.add(Flatten(input_shape=train_data.shape[1:]))
     model.add(BatchNormalization())
@@ -134,12 +135,12 @@ def train_top_model():
     plt.show()
 
 
-def predict():
+def predict(image_path):
     class_dictionary = np.load('class_indices.npy').item()
 
     num_classes = len(class_dictionary)
 
-    image_path = 'test/cherry/1056.jpg'
+    # image_path = 'test/cherry/1056.jpg'
 
     orig = cv2.imread(image_path)
 
@@ -187,4 +188,5 @@ def predict():
 if __name__ == '__main__': 
     # save_bottleneck_features()
     # train_top_model()
-    predict()
+    image_path = sys.argv[1]
+    predict(image_path)
